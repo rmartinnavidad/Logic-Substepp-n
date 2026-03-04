@@ -9,14 +9,19 @@ from gpu_extras.batch import batch_for_shader
 from mathutils import Vector, Euler, Quaternion
 from bpy_extras.io_utils import ImportHelper
 from bpy.props import (
-    EnumProperty, FloatProperty, IntProperty, PointerProperty,
-    StringProperty, CollectionProperty, BoolProperty,
+    EnumProperty,
+    FloatProperty,
+    IntProperty,
+    PointerProperty,
+    StringProperty,
+    CollectionProperty,
+    BoolProperty,
 )
 
 bl_info = {
     "name": "Logic Substepp'n",
     "author": "Royal",
-    "version": (9, 7, 2),
+    "version": (9, 7, 0),
     "blender": (5, 0, 0),
     "location": "View3D > N Panel > Logic Substepp'n",
     "description": "Logic Cockpit™: Smoov'mnt Curves, DeckFlow™, Recoil Micro-steps, and No Touchy Kinematic Safety.",
@@ -91,7 +96,7 @@ def get_deck_massive_library(self, context):
     elif self.physics_domain == 'LIFEFORM': return MATTER_LIFEFORM
     elif self.physics_domain == 'PLANT': return MATTER_PLANT
     return MATTER_MECHANICAL
-    
+
 # -------------------------------------------------------
 # AAAA MATH CORE (Catmull-Rom & fBm Noise)
 # -------------------------------------------------------
@@ -142,7 +147,7 @@ def evaluate_micro_step(mapping, raw_t):
     sc0, sc1, sc2, sc3 = Vector((s0.scl_x, s0.scl_y, s0.scl_z)), Vector((s1.scl_x, s1.scl_y, s1.scl_z)), Vector((s2.scl_x, s2.scl_y, s2.scl_z)), Vector((s3.scl_x, s3.scl_y, s3.scl_z))
     scl = catmull_rom_vec(sc0, sc1, sc2, sc3, t)
     return loc, rot, scl
-    
+
 # -------------------------------------------------------
 # VIEWPORT GHOSTING (ARC DRAW HANDLER)
 # -------------------------------------------------------
@@ -564,7 +569,8 @@ class LogicSubBatchSettings(bpy.types.PropertyGroup):
     use_rot_x: BoolProperty(); val_rot_x: FloatProperty(subtype='ANGLE'); use_rot_y: BoolProperty(); val_rot_y: FloatProperty(subtype='ANGLE'); use_rot_z: BoolProperty(); val_rot_z: FloatProperty(subtype='ANGLE')
     use_scl_x: BoolProperty(); val_scl_x: FloatProperty(default=1.0); use_scl_y: BoolProperty(); val_scl_y: FloatProperty(default=1.0); use_scl_z: BoolProperty(); val_scl_z: FloatProperty(default=1.0)
     snap_target_obj: PointerProperty(type=bpy.types.Object, name="Target Origin Object")
-    
+
+
 # -------------------------------------------------------
 # AUTO-GENERATED DRIVERS SCRIPT BUILDER
 # -------------------------------------------------------
@@ -825,124 +831,16 @@ def sync_from_data_text(context, raw_text=None):
         
     apply_logic_transform(context)
     update_data_text(scene)
-
-# -------------------------------------------------------
-# ASYNC PREVIEW TIMER (ELASTOMERIC PHYSICS)
-# -------------------------------------------------------
-
-def preview_step_callback():
-    global _PHYSICS_VELOCITY
-    try:
-        context = bpy.context
-        if not context or not context.scene: return 0.05
-        s = context.scene
-        if not getattr(s, "logic_sub_is_previewing", False): return None
-        
-        mapping = get_active_mapping(s, create=False)
-        if not mapping:
-            s.logic_sub_is_previewing = False; return None
-            
-        subs = max(1, mapping.substeps)
-        target = getattr(s, "logic_sub_preview_target", -1)
-        mode = s.logic_sub_preview_mode
-        scope = s.logic_sub_preview_scope
-        
-        # 1. Playhead Advancement
-        if scope == 'FULL':
-            next_val = s.logic_sub_full_scrubber + s.logic_sub_preview_direction
-            if mode == 'LOOP':
-                if next_val > subs: next_val = -subs 
-            elif mode == 'BOUNCE':
-                if next_val >= subs:
-                    next_val = subs; s.logic_sub_preview_direction = -1
-                elif next_val <= -subs:
-                    next_val = -subs; s.logic_sub_preview_direction = 1
-            s.logic_sub_full_scrubber = next_val
-            t_val = abs(next_val) + mapping.phase_offset
-        else:
-            if target != -1 and s.logic_sub_current_step >= target:
-                s.logic_sub_is_previewing = False; s.logic_sub_preview_target = -1; return None
-                
-            next_step = s.logic_sub_current_step + (1 if mode == 'LOOP' and target == -1 else s.logic_sub_preview_direction)
-            if mode == 'LOOP' and target == -1:
-                if next_step > subs: next_step = 0
-            elif mode == 'BOUNCE' and target == -1:
-                if next_step >= subs:
-                    next_step = subs; s.logic_sub_preview_direction = -1
-                elif next_step <= 0:
-                    next_step = 0; s.logic_sub_preview_direction = 1
-            s.logic_sub_current_step = next_step
-            t_val = next_step + mapping.phase_offset
-
-        # 2. Elastomeric Physics
-        for d_idx, deck in enumerate(s.logic_sub_decks):
-            m_deck = get_active_mapping(s, d_idx, create=False)
-            if not m_deck or len(m_deck.steps) == 0: continue
-            
-            d_obj, d_bone, is_bone = get_driven_target(s, d_idx)
-            if not d_obj: continue
-            tgt = d_bone if is_bone else d_obj
-            key = f"{d_obj.name}_{d_bone.name if is_bone else ''}"
-            
-            if key not in _PHYSICS_VELOCITY: _PHYSICS_VELOCITY[key] = {'v_loc': Vector((0,0,0)), 'v_rot': Euler((0,0,0))}
-            
-            target_loc, target_rot, _ = evaluate_micro_step(m_deck, t_val)
-            gr = m_deck.gear_ratio
-            
-            k = getattr(deck, "spring_tension", 0.15)
-            d = getattr(deck, "drag", 0.7)
-            m_weight = getattr(deck, "mass", 1.0)
-            
-            accel_loc = ((target_loc * gr) - tgt.location) * (k / m_weight)
-            _PHYSICS_VELOCITY[key]['v_loc'] += accel_loc
-            _PHYSICS_VELOCITY[key]['v_loc'] *= (1.0 - d)
-            tgt.location += _PHYSICS_VELOCITY[key]['v_loc']
-            
-            if tgt.rotation_mode not in {'XYZ', 'XZY', 'YXZ', 'YZX', 'ZXY', 'ZYX'}: tgt.rotation_mode = 'XYZ'
-            target_rot_v = Vector((target_rot.x, target_rot.y, target_rot.z)) * gr
-            curr_rot_v = Vector((tgt.rotation_euler.x, tgt.rotation_euler.y, tgt.rotation_euler.z))
-            accel_rot = (target_rot_v - curr_rot_v) * (k / m_weight)
-            
-            v_rot_vec = Vector((_PHYSICS_VELOCITY[key]['v_rot'].x, _PHYSICS_VELOCITY[key]['v_rot'].y, _PHYSICS_VELOCITY[key]['v_rot'].z))
-            v_rot_vec += accel_rot
-            v_rot_vec *= (1.0 - d)
-            _PHYSICS_VELOCITY[key]['v_rot'] = Euler((v_rot_vec.x, v_rot_vec.y, v_rot_vec.z))
-            
-            tgt.rotation_euler.x += _PHYSICS_VELOCITY[key]['v_rot'].x
-            tgt.rotation_euler.y += _PHYSICS_VELOCITY[key]['v_rot'].y
-            tgt.rotation_euler.z += _PHYSICS_VELOCITY[key]['v_rot'].z
-            
-        fps = s.logic_sub_preview_fps if s.logic_sub_preview_fps > 0 else 24
-        for area in context.screen.areas:
-            if area.type == 'VIEW_3D': area.tag_redraw()
-        return 1.0 / fps
-    except Exception as e:
-        print("Smoov'mnt Preview Error:", e)
-        try: bpy.context.scene.logic_sub_is_previewing = False
-        except: pass
-        return None
+    
 # -------------------------------------------------------
 # CORE SYSTEM OPERATORS
 # -------------------------------------------------------
-
-class LOGICSUB_OT_preview_play(bpy.types.Operator):
-    bl_idname = "logicsub.preview_play"
-    bl_label = "Toggle Preview Play"
-    
-    def execute(self, context):
-        s = context.scene
-        s.logic_sub_is_previewing = not s.logic_sub_is_previewing
-        if s.logic_sub_is_previewing:
-            s.logic_sub_preview_target = -1
-            s.logic_sub_preview_direction = 1
-            fps = s.logic_sub_preview_fps if s.logic_sub_preview_fps > 0 else 24
-            bpy.app.timers.register(preview_step_callback, first_interval=1.0 / fps)
-        return {'FINISHED'}
 
 class LOGICSUB_OT_apply_no_touchy_math(bpy.types.Operator):
     bl_idname = "logicsub.apply_no_touchy_math"
     bl_label = "Enforce Kinematic Boundaries"
     bl_description = "Calculates margin mathematically from the mass density and applies rigid collision limits"
+    
     deck_idx: IntProperty(default=-1)
     
     def execute(self, context):
@@ -958,7 +856,10 @@ class LOGICSUB_OT_apply_no_touchy_math(bpy.types.Operator):
         drv_obj, drv_bone, is_bone = get_driven_target(s, d_idx)
         if not drv_obj: return {'CANCELLED'}
         
+        # Pull massive library math parameter
         density = DENSITY_MAP.get(deck.physics_matter, 1000.0)
+        
+        # Dense objects produce rigid margins, Soft materials compress inwards
         margin_multiplier = 1000.0 / density
         final_margin = deck.collider_margin * margin_multiplier
         
@@ -975,10 +876,12 @@ class LOGICSUB_OT_apply_no_touchy_math(bpy.types.Operator):
             con.subtarget = deck.collider_bone
             
         con.distance = final_margin
-        con.limit_mode = 'LIMITDIST_OUTSIDE' # FIXED ENUM FOR BLENDER 4.0+
+        con.limit_mode = 'OUTSIDE'
         
+        # Sync constraints back to Logic Deck
         m = get_active_mapping(s, d_idx, create=False)
-        if m: bpy.ops.logicsub.set_driven_step(step=s.logic_sub_current_step, deck_override=d_idx)
+        if m:
+            bpy.ops.logicsub.set_driven_step(step=s.logic_sub_current_step, deck_override=d_idx)
         
         self.report({'INFO'}, f"Enforced {deck.physics_matter} ({final_margin:.4f}m) margin on {tgt.name}")
         return {'FINISHED'}
@@ -999,7 +902,7 @@ class LOGICSUB_OT_execute_backslide(bpy.types.Operator):
                 if not m_source or len(m_source.steps) == 0: continue
                 
                 m_target = get_active_mapping(s, d_idx, create=True, force_dir=target_dir)
-                if not m_target: continue 
+                if not m_target: continue # Safely skip if target mapping somehow fails
                 
                 m_target.substeps = m_source.substeps
                 target_len = max(1, m_target.substeps + 1)
@@ -1030,69 +933,6 @@ class LOGICSUB_OT_execute_backslide(bpy.types.Operator):
         update_data_text(s); apply_logic_transform(context)
         ls_log(s, f"Backslide Groove: Inverted {affected_count} steps to {target_dir}.")
         s.logic_sub_direction = target_dir
-        return {'FINISHED'}
-
-class LOGICSUB_OT_copy_deck(bpy.types.Operator):
-    bl_idname = "logicsub.copy_deck"
-    bl_label = "Copy Deck To..."
-    source_deck_idx: IntProperty()
-    target_deck_idx: IntProperty()
-    invert: BoolProperty(name="Invert Axes (* -1)", default=False)
-    
-    def invoke(self, context, event):
-        return context.window_manager.invoke_props_dialog(self)
-        
-    def draw(self, context):
-        layout = self.layout
-        layout.prop(self, "target_deck_idx", text="Target Deck Index (0-based)")
-        layout.prop(self, "invert")
-        
-    def execute(self, context):
-        s = context.scene
-        m_source = get_active_mapping(s, self.source_deck_idx, create=False)
-        m_target = get_active_mapping(s, self.target_deck_idx, create=True)
-        if not m_source or not m_target: return {'CANCELLED'}
-        
-        m_target.substeps = m_source.substeps
-        while len(m_target.steps) < len(m_source.steps): m_target.steps.add()
-        
-        for i, s_step in enumerate(m_source.steps):
-            t_step = m_target.steps[i]
-            inv = -1.0 if self.invert else 1.0
-            t_step.loc_x = s_step.loc_x * inv; t_step.loc_y = s_step.loc_y * inv; t_step.loc_z = s_step.loc_z * inv
-            t_step.rot_x = s_step.rot_x * inv; t_step.rot_y = s_step.rot_y * inv; t_step.rot_z = s_step.rot_z * inv
-            t_step.scl_x = s_step.scl_x; t_step.scl_y = s_step.scl_y; t_step.scl_z = s_step.scl_z
-            t_step.status = 'EDITED'
-        return {'FINISHED'}
-
-class LOGICSUB_OT_tween_all_steps(bpy.types.Operator):
-    bl_idname = "logicsub.tween_all_steps"
-    bl_label = "Magic Tween (Start to End)"
-    bl_description = "Interpolates all steps between Step 0 and the Last Step"
-    deck_idx: IntProperty()
-    def execute(self, context):
-        s = context.scene
-        m = get_active_mapping(s, self.deck_idx, create=False)
-        if not m or len(m.steps) < 3: return {'CANCELLED'}
-        
-        s1 = m.steps[0]
-        s2 = m.steps[-1]
-        total = len(m.steps) - 1
-        
-        for i in range(1, total):
-            f = i / total
-            step = m.steps[i]
-            step.loc_x = s1.loc_x + (s2.loc_x - s1.loc_x) * f
-            step.loc_y = s1.loc_y + (s2.loc_y - s1.loc_y) * f
-            step.loc_z = s1.loc_z + (s2.loc_z - s1.loc_z) * f
-            step.rot_x = s1.rot_x + (s2.rot_x - s1.rot_x) * f
-            step.rot_y = s1.rot_y + (s2.rot_y - s1.rot_y) * f
-            step.rot_z = s1.rot_z + (s2.rot_z - s1.rot_z) * f
-            step.scl_x = s1.scl_x + (s2.scl_x - s1.scl_x) * f
-            step.scl_y = s1.scl_y + (s2.scl_y - s1.scl_y) * f
-            step.scl_z = s1.scl_z + (s2.scl_z - s1.scl_z) * f
-            step.status = 'EDITED'
-        update_data_text(s); apply_logic_transform(context)
         return {'FINISHED'}
 
 class LOGICSUB_OT_generate_recoil(bpy.types.Operator):
@@ -1140,6 +980,7 @@ class LOGICSUB_OT_generate_recoil(bpy.types.Operator):
         update_data_text(s); apply_logic_transform(context)
         return {'FINISHED'}
 
+
 class LOGICSUB_OT_copy_error(bpy.types.Operator):
     bl_idname = "logicsub.copy_error"
     bl_label = "Open Crash Log"
@@ -1179,22 +1020,21 @@ class LOGICSUB_OT_remove_deck(bpy.types.Operator):
             s.logic_sub_active_deck_idx = max(0, min(s.logic_sub_active_deck_idx, len(s.logic_sub_decks) - 1))
         return {'FINISHED'}
 
-class LOGICSUB_OT_move_deck(bpy.types.Operator):
-    bl_idname = "logicsub.move_deck"
-    bl_label = "Move Deck"
-    direction: bpy.props.EnumProperty(items=[('UP', "Up", ""), ('DOWN', "Down", "")])
-
+class LOGICSUB_OT_nav_deck(bpy.types.Operator):
+    bl_idname = "logicsub.nav_deck"
+    bl_label = "Navigate Deck"
+    delta: IntProperty()
     def execute(self, context):
         s = context.scene
-        idx = s.logic_sub_active_deck_idx
-        list_length = len(s.logic_sub_decks)
-        if list_length < 2: return {'CANCELLED'}
-
-        new_idx = idx - 1 if self.direction == 'UP' else idx + 1
-        if 0 <= new_idx < list_length:
-            s.logic_sub_decks.move(idx, new_idx)
-            s.logic_sub_active_deck_idx = new_idx
+        if len(s.logic_sub_decks) > 0: s.logic_sub_active_deck_idx = (s.logic_sub_active_deck_idx + self.delta) % len(s.logic_sub_decks)
         return {'FINISHED'}
+
+class LOGICSUB_OT_set_active_deck(bpy.types.Operator):
+    bl_idname = "logicsub.set_active_deck"
+    bl_label = "Set Active Deck"
+    idx: IntProperty()
+    def execute(self, context):
+        context.scene.logic_sub_active_deck_idx = self.idx; return {'FINISHED'}
 
 class LOGICSUB_OT_init_mapping(bpy.types.Operator):
     bl_idname = "logicsub.init_mapping"
@@ -1240,10 +1080,7 @@ class LOGICSUB_OT_step_tool(bpy.types.Operator):
         
         drv_obj, drv_bone, is_bone = get_driven_target(s, self.deck_idx)
         
-        # FIXED: Proper context override to prevent select_all.poll() failures
-        if context.mode != 'OBJECT': bpy.ops.object.mode_set(mode='OBJECT')
-        for obj in context.view_layer.objects: obj.select_set(False)
-        
+        bpy.ops.object.select_all(action='DESELECT')
         if drv_obj:
             drv_obj.select_set(True)
             context.view_layer.objects.active = drv_obj
@@ -1254,25 +1091,17 @@ class LOGICSUB_OT_step_tool(bpy.types.Operator):
             drv_obj.data.bones[drv_bone.name].select = True
             drv_obj.data.bones.active = drv_obj.data.bones[drv_bone.name]
         
-        override = context.copy()
-        for area in context.screen.areas:
-            if area.type == 'VIEW_3D':
-                override['area'] = area
-                override['region'] = area.regions[0]
-                break
-                
-        with context.temp_override(**override):
-            if self.action == 'CURSOR_TO_SEL':
-                bpy.ops.view3d.snap_cursor_to_selected()
-            elif self.action == 'SEL_TO_CURSOR':
-                bpy.ops.view3d.snap_selected_to_cursor(use_offset=False)
-                bpy.ops.logicsub.set_driven_step(step=self.step_idx, deck_override=self.deck_idx)
-            elif self.action == 'CURSOR_TO_WORLD':
-                context.scene.cursor.location = (0,0,0)
-            elif self.action == 'ORIGIN_TO_CURSOR':
-                bpy.ops.object.origin_set(type='ORIGIN_CURSOR', center='MEDIAN')
-            elif self.action == 'ORIGIN_TO_GEOM':
-                bpy.ops.object.origin_set(type='ORIGIN_GEOMETRY', center='MEDIAN')
+        if self.action == 'CURSOR_TO_SEL':
+            bpy.ops.view3d.snap_cursor_to_selected()
+        elif self.action == 'SEL_TO_CURSOR':
+            bpy.ops.view3d.snap_selected_to_cursor(use_offset=False)
+            bpy.ops.logicsub.set_driven_step(step=self.step_idx, deck_override=self.deck_idx)
+        elif self.action == 'CURSOR_TO_WORLD':
+            context.scene.cursor.location = (0,0,0)
+        elif self.action == 'ORIGIN_TO_CURSOR':
+            bpy.ops.object.origin_set(type='ORIGIN_CURSOR', center='MEDIAN')
+        elif self.action == 'ORIGIN_TO_GEOM':
+            bpy.ops.object.origin_set(type='ORIGIN_GEOMETRY', center='MEDIAN')
             
         if context.mode != orig_mode:
             try: bpy.ops.object.mode_set(mode=orig_mode)
@@ -1487,7 +1316,7 @@ class LOGICSUB_OT_set_driven_step(bpy.types.Operator):
         s.logic_sub_is_capturing = False
         update_data_text(s)
         return {'FINISHED'}
-        
+
 class LOGICSUB_OT_flip_step(bpy.types.Operator):
     bl_idname = "logicsub.flip_step"
     bl_label = "Flip Step"
@@ -1581,7 +1410,7 @@ class LOGICSUB_OT_paste_clipboard(bpy.types.Operator):
         if not cb.has_data: return {'CANCELLED'}
         s.logic_sub_is_syncing = True
         target.loc_x = cb.loc_x; target.loc_y = cb.loc_y; target.loc_z = cb.loc_z
-        target.rot_x = cb.rot_x; target.rot_y = cb.rot_z; target.rot_z = cb.rot_z
+        target.rot_x = cb.rot_x; target.rot_y = cb.rot_y; target.rot_z = cb.rot_z
         target.scl_x = cb.scl_x; target.scl_y = cb.scl_y; target.scl_z = cb.scl_z
         target.status = 'EDITED'
         s.logic_sub_is_syncing = False
@@ -1818,7 +1647,7 @@ class LOGICSUB_OT_advanced_batch_snap(bpy.types.Operator):
                 eval_target = target_obj.evaluated_get(depsgraph)
                 context.scene.cursor.location = eval_target.matrix_world.translation.copy()
                 
-                for obj in context.view_layer.objects: obj.select_set(False)
+                bpy.ops.object.select_all(action='DESELECT')
                 drv_obj.select_set(True)
                 context.view_layer.objects.active = drv_obj
                 
@@ -2120,8 +1949,7 @@ class LOGICSUB_OT_clear_all_steps(bpy.types.Operator):
                 step.mod_con_states.clear()
                 step.status = 'UNSET'
         finally: s.logic_sub_is_syncing = False
-        update_data_text(s) 
-        # REMOVED apply_logic_transform(context) -> Now it won't snap the physical viewport objects to zero!
+        update_data_text(s); apply_logic_transform(context)
         return {'FINISHED'}
 
 class LOGICSUB_OT_capture_all_steps(bpy.types.Operator):
@@ -2277,19 +2105,127 @@ class LOGICSUB_OT_generate_drivers(bpy.types.Operator):
                     for tp in mc.tracked_props:
                         create_single_driver(t_obj, t_bone, live_mc, tp.prop_name, None, base_combo_name, mc_id + "_" + tp.prop_name, channel)
         return {'FINISHED'}
+
+# -------------------------------------------------------
+# ASYNC PREVIEW TIMER (ELASTOMERIC PHYSICS)
+# -------------------------------------------------------
+
+def preview_step_callback():
+    global _PHYSICS_VELOCITY
+    try:
+        context = bpy.context
+        if not context or not context.scene: return 0.05
+        s = context.scene
+        if not getattr(s, "logic_sub_is_previewing", False): return None
         
+        mapping = get_active_mapping(s, create=False)
+        if not mapping:
+            s.logic_sub_is_previewing = False; return None
+            
+        subs = max(1, mapping.substeps)
+        target = getattr(s, "logic_sub_preview_target", -1)
+        mode = s.logic_sub_preview_mode
+        scope = s.logic_sub_preview_scope
+        
+        # 1. Playhead Advancement
+        if scope == 'FULL':
+            next_val = s.logic_sub_full_scrubber + s.logic_sub_preview_direction
+            if mode == 'LOOP':
+                if next_val > subs: next_val = -subs 
+            elif mode == 'BOUNCE':
+                if next_val >= subs:
+                    next_val = subs; s.logic_sub_preview_direction = -1
+                elif next_val <= -subs:
+                    next_val = -subs; s.logic_sub_preview_direction = 1
+            s.logic_sub_full_scrubber = next_val
+            t_val = abs(next_val) + mapping.phase_offset
+        else:
+            if target != -1 and s.logic_sub_current_step >= target:
+                s.logic_sub_is_previewing = False; s.logic_sub_preview_target = -1; return None
+                
+            next_step = s.logic_sub_current_step + (1 if mode == 'LOOP' and target == -1 else s.logic_sub_preview_direction)
+            if mode == 'LOOP' and target == -1:
+                if next_step > subs: next_step = 0
+            elif mode == 'BOUNCE' and target == -1:
+                if next_step >= subs:
+                    next_step = subs; s.logic_sub_preview_direction = -1
+                elif next_step <= 0:
+                    next_step = 0; s.logic_sub_preview_direction = 1
+            s.logic_sub_current_step = next_step
+            t_val = next_step + mapping.phase_offset
+
+        # 2. Elastomeric Physics
+        for d_idx, deck in enumerate(s.logic_sub_decks):
+            m_deck = get_active_mapping(s, d_idx, create=False)
+            if not m_deck or len(m_deck.steps) == 0: continue
+            
+            d_obj, d_bone, is_bone = get_driven_target(s, d_idx)
+            if not d_obj: continue
+            tgt = d_bone if is_bone else d_obj
+            key = f"{d_obj.name}_{d_bone.name if is_bone else ''}"
+            
+            if key not in _PHYSICS_VELOCITY: _PHYSICS_VELOCITY[key] = {'v_loc': Vector((0,0,0)), 'v_rot': Euler((0,0,0))}
+            
+            target_loc, target_rot, _ = evaluate_micro_step(m_deck, t_val)
+            gr = m_deck.gear_ratio
+            
+            k = getattr(deck, "spring_tension", 0.15)
+            d = getattr(deck, "drag", 0.7)
+            m_weight = getattr(deck, "mass", 1.0)
+            
+            accel_loc = ((target_loc * gr) - tgt.location) * (k / m_weight)
+            _PHYSICS_VELOCITY[key]['v_loc'] += accel_loc
+            _PHYSICS_VELOCITY[key]['v_loc'] *= (1.0 - d)
+            tgt.location += _PHYSICS_VELOCITY[key]['v_loc']
+            
+            if tgt.rotation_mode not in {'XYZ', 'XZY', 'YXZ', 'YZX', 'ZXY', 'ZYX'}: tgt.rotation_mode = 'XYZ'
+            target_rot_v = Vector((target_rot.x, target_rot.y, target_rot.z)) * gr
+            curr_rot_v = Vector((tgt.rotation_euler.x, tgt.rotation_euler.y, tgt.rotation_euler.z))
+            accel_rot = (target_rot_v - curr_rot_v) * (k / m_weight)
+            
+            v_rot_vec = Vector((_PHYSICS_VELOCITY[key]['v_rot'].x, _PHYSICS_VELOCITY[key]['v_rot'].y, _PHYSICS_VELOCITY[key]['v_rot'].z))
+            v_rot_vec += accel_rot
+            v_rot_vec *= (1.0 - d)
+            _PHYSICS_VELOCITY[key]['v_rot'] = Euler((v_rot_vec.x, v_rot_vec.y, v_rot_vec.z))
+            
+            tgt.rotation_euler.x += _PHYSICS_VELOCITY[key]['v_rot'].x
+            tgt.rotation_euler.y += _PHYSICS_VELOCITY[key]['v_rot'].y
+            tgt.rotation_euler.z += _PHYSICS_VELOCITY[key]['v_rot'].z
+            
+        fps = s.logic_sub_preview_fps if s.logic_sub_preview_fps > 0 else 24
+        for area in context.screen.areas:
+            if area.type in {'VIEW_3D', 'UI'}: area.tag_redraw()
+        return 1.0 / fps
+    except Exception as e:
+        print("Smoov'mnt Preview Error:", e)
+        try: bpy.context.scene.logic_sub_is_previewing = False
+        except: pass
+        return None
+
+class LOGICSUB_OT_preview_play(bpy.types.Operator):
+    bl_idname = "logicsub.preview_play"
+    bl_label = "Play/Stop Preview"
+    
+    def execute(self, context):
+        s = context.scene
+        if getattr(s, "logic_sub_is_previewing", False):
+            s.logic_sub_is_previewing = False; s.logic_sub_preview_target = -1
+        else:
+            s.logic_sub_is_previewing = True
+            mapping = get_active_mapping(s, create=False)
+            if mapping and mapping.substeps > 0:
+                s.logic_sub_preview_direction = 1
+                apply_logic_transform(context); context.view_layer.update()
+                fps = s.logic_sub_preview_fps if s.logic_sub_preview_fps > 0 else 24
+                bpy.app.timers.register(preview_step_callback, first_interval=1.0 / fps)
+            else:
+                s.logic_sub_is_previewing = False
+        return {'FINISHED'}
+
+
 # -------------------------------------------------------
 # DECKFLOW™ NESTED UI ENGINE
 # -------------------------------------------------------
-
-class LOGICSUB_UL_deck_list(bpy.types.UIList):
-    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
-        deck_name = item.driven_bone if item.driven_bone else (item.driven_object.name if item.driven_object else f"Deck {index+1}")
-        if self.layout_type in {'DEFAULT', 'COMPACT'}:
-            layout.label(text=deck_name, icon='OBJECT_DATA')
-        elif self.layout_type == 'GRID':
-            layout.alignment = 'CENTER'
-            layout.label(text="", icon='OBJECT_DATA')
 
 def _draw_single_deck_step(layout, context, s, mapping, deck_idx, step_idx, subs, is_nested=False):
     step_data = mapping.steps[step_idx]
@@ -2462,233 +2398,467 @@ def draw_step_ui_with_deckflow(layout, context, s, active_mapping, active_deck_i
             _draw_single_deck_step(layout, context, s, m_nested, d_idx, step_idx, subs, is_nested=True)
             
     layout.separator(factor=0.25)
-    
+
 # -------------------------------------------------------
 # MAIN UI PANEL
 # -------------------------------------------------------
 
-class VIEW3D_PT_logic_sub(bpy.types.Panel):
+class LOGICSUB_PT_panel(bpy.types.Panel):
+    bl_label = "Logic Substepp'n"
+    bl_idname = "LOGICSUB_PT_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Substepp'n"
-    bl_label = "Logic Substepp'n: DeckFlow"
+    bl_category = "Logic Substepp'n"
 
     def draw(self, context):
+        global _LS_CRASH_TRACE
+        try:
+            self._draw_safe(context)
+            _LS_CRASH_TRACE = ""
+        except Exception as e:
+            err_str = traceback.format_exc()
+            if _LS_CRASH_TRACE != err_str:
+                _LS_CRASH_TRACE = err_str
+            layout = self.layout
+            box = layout.box(); box.alert = True
+            box.label(text="CRITICAL UI DRAW ERROR", icon='ERROR')
+            for line in err_str.strip().split('\n')[-3:]:
+                if line.strip(): box.label(text=line.strip())
+            box.separator()
+            box.operator("logicsub.copy_error", text="Click Here to Open Full Crash Log", icon='TEXT')
+
+    def _draw_safe(self, context):
         layout = self.layout
         s = context.scene
 
-        # --- TOP HEADER: FILE OPS & SYSTEM ---
-        row_sys = layout.row(align=True)
-        row_sys.operator("logicsub.import_data", text="Import", icon='IMPORT')
-        row_sys.operator("logicsub.export_data", text="Export", icon='EXPORT')
-        row_sys.operator("logicsub.sync_text", text="Sync", icon='FILE_REFRESH')
+        row = layout.row(align=True)
+        row.operator("logicsub.open_data", text="Live Data", icon='TEXT')
+        row.operator("logicsub.import_data", text="Import", icon='IMPORT')
+        row.operator("logicsub.export_data", text="Export", icon='EXPORT')
         
-        row_db = layout.row(align=True)
-        row_db.operator("logicsub.open_data", text="Data", icon='SPREADSHEET')
-        row_db.operator("logicsub.open_log", text="Log", icon='TEXT')
-        row_db.operator("logicsub.reset_table", text="Reset Master", icon='TRASH')
-        row_db.operator("logicsub.copy_error", text="", icon='ERROR')
-        
+        row_tools = layout.row(align=True)
+        row_tools.operator("logicsub.sync_text", text="Sync from Internal", icon='FILE_REFRESH')
+        row_tools.operator("logicsub.reset_table", text="", icon='TRASH')
+        row_tools.operator("logicsub.open_log", text="", icon='INFO')
         layout.separator()
 
-        # --- 1. TARGET SELECTION (LOGIC DRIVER) ---
-        box_target = layout.box()
-        box_target.label(text="Logic Trigger (The Driver)", icon='CON_KINEMATIC')
-        box_target.prop(s, "logic_sub_object", text="")
-        t_obj = s.logic_sub_object
-        if t_obj and t_obj.type == 'ARMATURE':
-            box_target.prop_search(s, "logic_sub_bone_name", t_obj.pose, "bones", text="", icon='BONE_DATA')
-        
-        row_chan = box_target.row(align=True)
-        row_chan.prop(s, "logic_sub_channel", text="")
-        row_chan.prop(s, "logic_sub_direction", text="", icon='ARROW_LEFTRIGHT')
-
-        # --- 2. DECK MANAGER (DRIVEN TARGETS) ---
+        box = layout.box()
+        box.operator("logicsub.generate_drivers", text="Generate Drivers (All Decks)", icon='OUTLINER_OB_LIGHT')
         layout.separator()
-        box_deck = layout.box()
-        row_deck_header = box_deck.row()
-        row_deck_header.label(text="Driven Decks", icon='LIBRARY_DATA_OVERRIDE')
+
+        layout.label(text="Target (Trigger)", icon='OUTLINER_OB_ARMATURE')
+        layout.prop(s, "logic_sub_object", text="Target Object")
+        if s.logic_sub_object and s.logic_sub_object.type == 'ARMATURE':
+            layout.prop_search(s, "logic_sub_bone_name", s.logic_sub_object.pose, "bones", text="Target Bone")
+
+        obj, bone, is_bone = get_logic_target(s)
+        if not obj:
+            layout.alert = True
+            layout.label(text="Select a Target Object first.", icon='INFO')
+            return
+
+        layout.separator()
+
+        m_pos = get_active_mapping(s, create=True, force_dir='POS')
+        m_neg = get_active_mapping(s, create=True, force_dir='NEG')
         
-        # New UI Viewer List Implementation
-        row_list = box_deck.row()
-        row_list.template_list("LOGICSUB_UL_deck_list", "", s, "logic_sub_decks", s, "logic_sub_active_deck_idx", rows=3)
+        if m_pos and m_neg:
+            layout.prop(m_pos, "target_max", text="Pos Target (+)")
+            layout.prop(m_neg, "target_max", text="Neg Target (-)")
+        else:
+            box_warn = layout.box()
+            box_warn.label(text="Assign a Deck Driven Object below to enable Targets.", icon='INFO')
+            
+        layout.separator()
+        layout.label(text="Axis Direction:", icon='ORIENTATION_LOCAL')
+        layout.prop(s, "logic_sub_channel")
+        layout.prop(s, "logic_sub_direction", expand=True)
+
+        op = layout.operator("logicsub.exec", text="Commit Transform to Trigger", icon='CHECKMARK')
+        op.mode = 'UPDATE'
+
+        layout.separator()
         
-        col_list_ops = row_list.column(align=True)
-        col_list_ops.operator("logicsub.add_deck", text="", icon='ADD')
-        col_list_ops.operator("logicsub.remove_deck", text="", icon='REMOVE')
-        col_list_ops.separator()
-        op_up = col_list_ops.operator("logicsub.move_deck", text="", icon='TRIA_UP')
-        op_up.direction = 'UP'
-        op_dn = col_list_ops.operator("logicsub.move_deck", text="", icon='TRIA_DOWN')
-        op_dn.direction = 'DOWN'
+        layout.prop(s, "logic_sub_show_inversion", text="The Backslide Groove (Auto-Invert)", icon='MOD_MIRROR', toggle=True)
+        if s.logic_sub_show_inversion:
+            inv_box = layout.box()
+            header = inv_box.row()
+            header.label(text="Flip-Step Synthesizer", icon='SOUND')
+            close_op = header.operator("wm.context_toggle", text="", icon='X')
+            close_op.data_path = "scene.logic_sub_show_inversion"
+            
+            inv_box.label(text="Channels to Invert (Current to Opposite Axis):")
+            row_l = inv_box.row(align=True); row_l.prop(s, "logic_sub_inv_loc_x", text="Loc X", toggle=True); row_l.prop(s, "logic_sub_inv_loc_y", text="Loc Y", toggle=True); row_l.prop(s, "logic_sub_inv_loc_z", text="Loc Z", toggle=True)
+            row_r = inv_box.row(align=True); row_r.prop(s, "logic_sub_inv_rot_x", text="Rot X", toggle=True); row_r.prop(s, "logic_sub_inv_rot_y", text="Rot Y", toggle=True); row_r.prop(s, "logic_sub_inv_rot_z", text="Rot Z", toggle=True)
+            row_s = inv_box.row(align=True); row_s.prop(s, "logic_sub_inv_scl_x", text="Scl X", toggle=True); row_s.prop(s, "logic_sub_inv_scl_y", text="Scl Y", toggle=True); row_s.prop(s, "logic_sub_inv_scl_z", text="Scl Z", toggle=True)
+            
+            inv_box.separator()
+            inv_box.operator("logicsub.execute_backslide", text="Execute Backslide Groove", icon='PLAY_REVERSE')
+            
+        layout.separator()
+
+        mapping = get_active_mapping(s, create=False)
+        if mapping:
+            layout.prop(mapping, "substeps", text="Resolution (Universal)")
+
+            split = layout.split(factor=0.33, align=True)
+            left, mid, right = split.column(align=True), split.column(align=True), split.column(align=True)
+            op_prev = left.operator("logicsub.exec", text="◀ PREV"); op_prev.mode = 'NAV'; op_prev.delta = -1
+            
+            subs = mapping.substeps
+            step_val = (s.logic_sub_current_step / max(1, subs)) * mapping.target_max if subs > 0 else 0.0
+            mid.alignment = 'CENTER'
+            mid.label(text=f"{s.logic_sub_current_step}/{subs} ({step_val:.4f})")
+            
+            op_next = right.operator("logicsub.exec", text="NEXT ▶"); op_next.mode = 'NAV'; op_next.delta = 1
+            
+            layout.separator()
+            row_actions = layout.row(align=True)
+            row_actions.operator("logicsub.capture_all_steps", text="Capture All", icon='RECORD_ON')
+            row_actions.operator("logicsub.clear_all_steps", text="Clear All", icon='TRASH')
+            layout.separator()
+            
+            steps = mapping.steps
+            cols = 4
+            total = subs + 1 if subs > 0 else 1
+            for i in range(0, total, cols):
+                row = layout.row(align=True)
+                for step in range(i, min(i + cols, total)):
+                    pct = int(round(100 * step / max(1, subs)))
+                    status = 'GREY'
+                    if steps and step < len(steps): status = steps[step].status
+                    btn_row = row.row(align=True)
+                    if status == 'UNSET': btn_row.alert = True; op_j = btn_row.operator("logicsub.exec", text=f"{pct}%", icon='RECORD_ON')
+                    elif status == 'EDITED': op_j = btn_row.operator("logicsub.exec", text=f"{pct}%", depress=True) 
+                    elif status == 'SET': op_j = btn_row.operator("logicsub.exec", text=f"{pct}%", icon='CHECKMARK') 
+                    else: op_j = btn_row.operator("logicsub.exec", text=f"{pct}%") 
+                    op_j.mode = 'JUMP'; op_j.step = step
+            
+            layout.separator()
+
+            layout.prop(s, "logic_sub_display_mode", text="Display Conversion Fields")
+            
+            unit_label = "rotation" if s.logic_sub_channel.startswith('ROT') else "unit" if s.logic_sub_channel.startswith('LOC') else "scale"
+            if subs > 0:
+                v0 = (0 / subs) * mapping.target_max
+                v1 = (1 / subs) * mapping.target_max
+                delta_v = abs(v1 - v0)
+                delta_p = 100.0 / subs
+                per_step = delta_p / delta_v if delta_v > 0 else 0.0
+            else: delta_v = 0.0; per_step = 0.0
+
+            if s.logic_sub_display_mode == 'SUBSTEPS':
+                layout.label(text="Substep Values:", icon='LINENUMBERS_ON')
+                box = layout.box()
+                for step in range(subs + 1):
+                    pct = int(round(100 * step / max(1, subs)))
+                    val = (step / max(1, subs)) * mapping.target_max
+                    r = box.row()
+                    r.alignment = 'LEFT'
+                    r.label(text=f"Step {step} [{pct}%]   ➔   {val:.4f}")
+            elif s.logic_sub_display_mode == 'DIFFERENCE':
+                layout.label(text="Value Differences:", icon='DRIVER_DISTANCE')
+                box = layout.box()
+                box.label(text=f"Δ Constant per step: {delta_v:.4f}")
+                for step in range(subs): 
+                    box.label(text=f"Step {step} ➔ {step+1}   Δ = {delta_v:.4f}")
+            elif s.logic_sub_display_mode == 'PERUNIT':
+                layout.label(text="Per Unit Conversion:", icon='DRIVER_DISTANCE')
+                box = layout.box()
+                box.label(text=f"1 {unit_label} = {per_step:.4f} steps")
+
+        # --- STEP 3: DRIVEN DECKFLOW™ ---
+        df_box = layout.box()
+        df_box.label(text="Driven DeckFlow™", icon='NODETREE')
+
+        deck_row = df_box.row(align=True)
+        deck_row.operator("logicsub.add_deck", text="", icon='ADD')
         
         if len(s.logic_sub_decks) == 0:
-            box_deck.label(text="No decks. Add one to start.", icon='INFO')
+            df_box.label(text="Click '+' to create your first Deck.", icon='INFO')
             return
-
-        d_idx = s.logic_sub_active_deck_idx
-        deck = s.logic_sub_decks[d_idx]
+            
+        deck_row.operator("logicsub.nav_deck", text="", icon='TRIA_LEFT').delta = -1
+        active_idx = s.logic_sub_active_deck_idx
+        start_idx = max(0, min(active_idx - 1, len(s.logic_sub_decks) - 3))
+        end_idx = min(len(s.logic_sub_decks), start_idx + 3)
         
-        row_deck_tools = box_deck.row(align=True)
-        op_copy = row_deck_tools.operator("logicsub.copy_deck", text="Copy Deck To...", icon='DUPLICATE')
-        op_copy.source_deck_idx = d_idx
-        op_tween = row_deck_tools.operator("logicsub.tween_all_steps", text="Magic Tween", icon='IPO_BEZIER')
-        op_tween.deck_idx = d_idx
-
-        box_deck.prop(deck, "driven_object", text="Target")
+        for i in range(start_idx, end_idx):
+            deck = s.logic_sub_decks[i]
+            is_active = (i == active_idx)
+            has_target = deck.driven_object is not None
+            d_name = deck.driven_bone if deck.driven_bone else (deck.driven_object.name if deck.driven_object else f"Deck {i+1}")
+            if len(d_name) > 12: d_name = d_name[:10] + ".." 
+            
+            col = deck_row.column(align=True)
+            if not has_target: col.alert = True 
+            op = col.operator("logicsub.set_active_deck", text=f"[{d_name}]", depress=is_active); op.idx = i
+                
+        deck_row.operator("logicsub.nav_deck", text="", icon='TRIA_RIGHT').delta = 1
+        deck_row.operator("logicsub.remove_deck", text="", icon='TRASH')
+        
+        if active_idx >= len(s.logic_sub_decks): active_idx = max(0, len(s.logic_sub_decks) - 1)
+        deck = s.logic_sub_decks[active_idx]
+        
+        df_box.prop(deck, "driven_object", text="Driven Object")
         if deck.driven_object and deck.driven_object.type == 'ARMATURE':
-            box_deck.prop_search(deck, "driven_bone", deck.driven_object.pose, "bones", text="", icon='BONE_DATA')
-
-        active_mapping = get_active_mapping(s, d_idx, create=False)
-        if not active_mapping:
-            box_deck.operator("logicsub.init_mapping", text="Initialize Deck Mapping", icon='PLUS')
+            df_box.prop_search(deck, "driven_bone", deck.driven_object.pose, "bones", text="Driven Bone")
+            
+        if not deck.driven_object:
+            layout.alert = True
+            layout.label(text="Assign a Driven Object to continue editing.", icon='INFO')
             return
 
-        # --- PHYSICS ENGINE SETTINGS ---
-        box_deck.prop(s, "logic_sub_show_physics", icon='PHYSICS', text="Elastomeric Physics", toggle=True)
-        if s.logic_sub_show_physics:
-            phys_box = box_deck.box()
-            phys_box.prop(deck, "physics_domain", text="Domain")
-            if deck.physics_domain == 'MECHANICAL': phys_box.prop(deck, "physics_matter", text="Material")
+        # Inject Physics and Kinematic Safeties directly into the Deck parameters:
+        if deck.driven_object:
+            phys_box = df_box.box()
+            phys_box.label(text="Pseudo-Physics Material & Mass", icon='PHYSICS')
             
-            p_row = phys_box.row(align=True)
-            p_row.prop(deck, "mass")
-            p_row.prop(deck, "drag")
-            p_row.prop(deck, "spring_tension")
+            row_mat = phys_box.row()
+            row_mat.prop(deck, "physics_domain", text="")
+            row_mat.prop(deck, "physics_matter", text="Type")
             
+            row_dyn = phys_box.row()
+            row_dyn.prop(deck, "mass")
+            row_dyn.prop(deck, "drag")
+            row_dyn.prop(deck, "spring_tension")
+
             col_box = phys_box.box()
-            col_box.label(text="Kinematic Boundaries (No Touchy)", icon='CON_DISTLIMIT')
-            col_box.prop(deck, "collider_target", text="Collider")
+            col_box.label(text="Kinematic Boundaries (No Touchy)", icon='FAKE_USER_ON')
+            col_box.prop(deck, "collider_target", text="Collider Target")
             if deck.collider_target and deck.collider_target.type == 'ARMATURE':
-                col_box.prop_search(deck, "collider_bone", deck.collider_target.pose, "bones", text="", icon='BONE_DATA')
-            col_box.prop(deck, "collider_margin", text="Base Margin")
+                col_box.prop_search(deck, "collider_bone", deck.collider_target.pose, "bones", text="Collider Bone")
             
-            col_op = col_box.operator("logicsub.apply_no_touchy_math", text="Enforce Boundary", icon='SHIELD_OVERLAY')
-            col_op.deck_idx = d_idx
+            if deck.collider_target:
+                row_c = col_box.row()
+                row_c.prop(deck, "collider_margin", text="Margin")
+                op_nt = row_c.operator("logicsub.apply_no_touchy_math", text="ENFORCE BOUNDARIES", icon='CONSTRAINT')
+                op_nt.deck_idx = active_idx
 
-        # --- 3. SCRUBBER & SYNC ---
-        layout.separator()
-        box_scrub = layout.box()
-        box_scrub.label(text="Scrubber & Sync", icon='TIME')
-        
-        row_target = box_scrub.row(align=True)
-        row_target.prop(active_mapping, "target_max", text="Trigger Max")
-        row_target.prop(active_mapping, "substeps", text="Steps")
-        
-        row_scrubber = box_scrub.row(align=True)
-        row_scrubber.prop(s, "logic_sub_full_scrubber", text="Scrub", slider=True)
-        
-        row_phase = box_scrub.row(align=True)
-        row_phase.prop(active_mapping, "phase_offset", text="Phase Offset")
-        row_phase.prop(active_mapping, "gear_ratio", text="Gear Ratio")
-        
-        row_global = box_scrub.row(align=True)
-        row_global.operator("logicsub.capture_all_steps", text="Capture All", icon='RECORD_ON')
-        row_global.operator("logicsub.clear_all_steps", text="Clear All", icon='TRASH')
-        row_global.operator("logicsub.execute_backslide", text="Backslide Groove", icon='UV_SYNC_SELECT')
+        if not mapping:
+            layout.separator(); warn_box = layout.box(); warn_box.alert = True; warn_box.scale_y = 1.5
+            warn_box.operator("logicsub.init_mapping", text="Initialize Deck Link", icon='LINKED')
+            return
 
-        row_drv = box_scrub.row(align=True)
-        row_drv.operator("logicsub.generate_drivers", text="Compile Drivers", icon='SCRIPT')
-        row_drv.operator("logicsub.auto_limit_bounds", text="Auto Bounds", icon='CON_LIMITROT').deck_idx = d_idx
-
-        preview_icon = 'PAUSE' if getattr(s, "logic_sub_is_previewing", False) else 'PLAY'
-        row_prev = box_scrub.row(align=True)
-        row_prev.operator("logicsub.preview_play", text="Play Smoov'mnt", icon=preview_icon)
-        row_prev.prop(s, "logic_sub_preview_mode", text="")
-        row_prev.prop(s, "logic_sub_preview_scope", text="")
-        row_prev.prop(s, "logic_sub_preview_fps", text="FPS")
-
-        # --- 4. BATCH & MACROS ---
-        layout.separator()
-        b_box = layout.box()
-        b_box.prop(s, "logic_sub_show_batcher", text="Batch Processing", icon='MOD_ARRAY', toggle=True)
+        # --- BATCH EDITOR ---
+        df_box.separator()
+        df_box.prop(s, "logic_sub_show_batcher", text="Open Batch Editor", icon='LINE_DATA', toggle=True)
         if s.logic_sub_show_batcher:
+            b_box = df_box.box()
+            header = b_box.row()
+            header.label(text="Batch Channel Editor", icon='LINE_DATA')
+            close_op = header.operator("wm.context_toggle", text="", icon='X')
+            close_op.data_path = "scene.logic_sub_show_batcher"
+            
             b = s.logic_sub_batch
-            b_box.operator("logicsub.batch_select_all", text="Select All", icon='CHECKBOX_HLT').state = True
-            b_box.operator("logicsub.batch_select_all", text="Deselect All", icon='CHECKBOX_DEHLT').state = False
+            b_box.prop(b, "operation")
+            b_box.prop(b, "is_progressive")
             
-            b_box.prop(b, "operation", text="Op")
-            if b.operation in ['SET', 'ADD']: b_box.prop(b, "is_progressive")
-            
-            col = b_box.column(align=True)
-            r = col.row(align=True); r.prop(b, "use_loc_x", text="", icon='CHECKBOX_HLT' if b.use_loc_x else 'CHECKBOX_DEHLT'); r.prop(b, "val_loc_x", text="X"); r.prop(b, "use_loc_y", text="", icon='CHECKBOX_HLT' if b.use_loc_y else 'CHECKBOX_DEHLT'); r.prop(b, "val_loc_y", text="Y"); r.prop(b, "use_loc_z", text="", icon='CHECKBOX_HLT' if b.use_loc_z else 'CHECKBOX_DEHLT'); r.prop(b, "val_loc_z", text="Z")
-            r2 = col.row(align=True); r2.prop(b, "use_rot_x", text="", icon='CHECKBOX_HLT' if b.use_rot_x else 'CHECKBOX_DEHLT'); r2.prop(b, "val_rot_x", text="rX"); r2.prop(b, "use_rot_y", text="", icon='CHECKBOX_HLT' if b.use_rot_y else 'CHECKBOX_DEHLT'); r2.prop(b, "val_rot_y", text="rY"); r2.prop(b, "use_rot_z", text="", icon='CHECKBOX_HLT' if b.use_rot_z else 'CHECKBOX_DEHLT'); r2.prop(b, "val_rot_z", text="rZ")
-            r3 = col.row(align=True); r3.prop(b, "use_scl_x", text="", icon='CHECKBOX_HLT' if b.use_scl_x else 'CHECKBOX_DEHLT'); r3.prop(b, "val_scl_x", text="sX"); r3.prop(b, "use_scl_y", text="", icon='CHECKBOX_HLT' if b.use_scl_y else 'CHECKBOX_DEHLT'); r3.prop(b, "val_scl_y", text="sY"); r3.prop(b, "use_scl_z", text="", icon='CHECKBOX_HLT' if b.use_scl_z else 'CHECKBOX_DEHLT'); r3.prop(b, "val_scl_z", text="sZ")
-            
-            b_box.operator("logicsub.batch_apply", text="Apply Batch", icon='FILE_TICK')
-            
-            snap_box = b_box.box()
-            snap_box.prop(b, "snap_target_obj", text="Batch Target Origin")
-            snap_box.operator("logicsub.advanced_batch_snap", text="Execute Macro Snap", icon='PIVOT_CURSOR')
+            split = b_box.split(factor=0.33)
+            col_loc = split.column(align=True); col_loc.label(text="Location")
+            r = col_loc.row(align=True); r.prop(b, "use_loc_x", text=""); r_v = r.row(align=True); r_v.active = b.use_loc_x; r_v.prop(b, "val_loc_x", text="X")
+            r = col_loc.row(align=True); r.prop(b, "use_loc_y", text=""); r_v = r.row(align=True); r_v.active = b.use_loc_y; r_v.prop(b, "val_loc_y", text="Y")
+            r = col_loc.row(align=True); r.prop(b, "use_loc_z", text=""); r_v = r.row(align=True); r_v.active = b.use_loc_z; r_v.prop(b, "val_loc_z", text="Z")
 
-        # --- 5. DATA STEPS (DECKFLOW) ---
+            col_rot = split.column(align=True); col_rot.label(text="Rotation")
+            r = col_rot.row(align=True); r.prop(b, "use_rot_x", text=""); r_v = r.row(align=True); r_v.active = b.use_rot_x; r_v.prop(b, "val_rot_x", text="X")
+            r = col_rot.row(align=True); r.prop(b, "use_rot_y", text=""); r_v = r.row(align=True); r_v.active = b.use_rot_y; r_v.prop(b, "val_rot_y", text="Y")
+            r = col_rot.row(align=True); r.prop(b, "use_rot_z", text=""); r_v = r.row(align=True); r_v.active = b.use_rot_z; r_v.prop(b, "val_rot_z", text="Z")
+
+            col_scl = split.column(align=True); col_scl.label(text="Scale")
+            r = col_scl.row(align=True); r.prop(b, "use_scl_x", text=""); r_v = r.row(align=True); r_v.active = b.use_scl_x; r_v.prop(b, "val_scl_x", text="X")
+            r = col_scl.row(align=True); r.prop(b, "use_scl_y", text=""); r_v = r.row(align=True); r_v.active = b.use_scl_y; r_v.prop(b, "val_scl_y", text="Y")
+            r = col_scl.row(align=True); r.prop(b, "use_scl_z", text=""); r_v = r.row(align=True); r_v.active = b.use_scl_z; r_v.prop(b, "val_scl_z", text="Z")
+
+            b_box.separator()
+            b_box.label(text="Target Substeps:")
+            sel_row = b_box.row(align=True)
+            sel_row.operator("logicsub.batch_select_all", text="Select All").state = True
+            sel_row.operator("logicsub.batch_select_all", text="Deselect All").state = False
+            
+            grid = b_box.grid_flow(columns=8, align=True)
+            for i, step in enumerate(mapping.steps): grid.prop(step, "is_selected_for_batch", text=f"Stp {i}", toggle=True)
+            
+            b_box.separator()
+            adv_box = b_box.box()
+            adv_box.label(text="Advanced Batch Snap Macro", icon='PIVOT_CURSOR')
+            adv_box.prop(b, "snap_target_obj", text="Target Origin")
+            snapping_name = deck.driven_bone if deck.driven_bone else deck.driven_object.name
+            adv_box.label(text=f"Snapping Object: [{snapping_name}]", icon='LINKED')
+            adv_box.operator("logicsub.advanced_batch_snap", text="Execute Deep Snap", icon='PLAY')
+
+            b_box.separator()
+            b_box.operator("logicsub.batch_apply", text="APPLY OPERATION", icon='CHECKMARK')
+
+        # --- STEP 4: DECKFLOW UI DRAWING LOOP ---
+        df_box.separator()
+        df_box.label(text=f"Editing Active Deck: {deck.driven_object.name}", icon='EDITMODE_HLT')
+        
+        for i in range(len(mapping.steps)):
+            draw_step_ui_with_deckflow(df_box, context, s, mapping, active_idx, i, subs)
+
+        # --- STEP 5: SLOPES ---
         layout.separator()
-        box_steps = layout.box()
-        box_steps.label(text="Substeps", icon='ALIGN_JUSTIFY')
-        subs = max(1, active_mapping.substeps)
-        for i in range(len(active_mapping.steps)):
-            step_col = box_steps.column(align=True)
-            if s.logic_sub_show_batcher:
-                row_sel = step_col.row(align=True)
-                row_sel.prop(active_mapping.steps[i], "is_selected_for_batch", text="", icon='CHECKBOX_HLT' if active_mapping.steps[i].is_selected_for_batch else 'CHECKBOX_DEHLT')
-                step_box = row_sel.column(align=True)
-            else:
-                step_box = step_col
-                
-            draw_step_ui_with_deckflow(step_box, context, s, active_mapping, d_idx, i, subs)
+        layout.prop(s, "logic_sub_show_slopes", text="View Value Per Unit (Slopes)", icon='GRAPH', toggle=True)
+        if s.logic_sub_show_slopes and mapping:
+            s_box = layout.box()
+            s_header = s_box.row()
+            s_header.label(text="Slope Data (Driven Δ / Target Δ)", icon='DRIVER_DISTANCE')
+            s_close = s_header.operator("wm.context_toggle", text="", icon='X')
+            s_close.data_path = "scene.logic_sub_show_slopes"
+            
+            sub_count = max(1, subs)
+            target_val = mapping.target_max
 
-        # --- 6. ACTION BAKER & TAGS ---
+            for i in range(len(mapping.steps) - 1):
+                step1 = mapping.steps[i]; step2 = mapping.steps[i+1]
+                t1 = (i / sub_count) * target_val; t2 = ((i+1) / sub_count) * target_val
+                delta_t = abs(t2 - t1)
+                
+                seg_box = s_box.box()
+                seg_box.label(text=f"Segment {i+1} (Step {i} ➔ {i+1})  |  Target Δ: {delta_t:.4f}", icon='IPO_LINEAR')
+                
+                split = seg_box.split(factor=0.33)
+                col_l = split.column(align=True); col_r = split.column(align=True); col_s = split.column(align=True)
+                
+                lx = abs(step2.loc_x - step1.loc_x) / delta_t if delta_t != 0 else 0.0
+                ly = abs(step2.loc_y - step1.loc_y) / delta_t if delta_t != 0 else 0.0
+                lz = abs(step2.loc_z - step1.loc_z) / delta_t if delta_t != 0 else 0.0
+                col_l.label(text=f"Loc X: {lx:.4f}"); col_l.label(text=f"Loc Y: {ly:.4f}"); col_l.label(text=f"Loc Z: {lz:.4f}")
+                
+                rx = abs(math.degrees(step2.rot_x) - math.degrees(step1.rot_x)) / delta_t if delta_t != 0 else 0.0
+                ry = abs(math.degrees(step2.rot_y) - math.degrees(step1.rot_y)) / delta_t if delta_t != 0 else 0.0
+                rz = abs(math.degrees(step2.rot_z) - math.degrees(step1.rot_z)) / delta_t if delta_t != 0 else 0.0
+                col_r.label(text=f"Rot X: {rx:.4f}°"); col_r.label(text=f"Rot Y: {ry:.4f}°"); col_r.label(text=f"Rot Z: {rz:.4f}°")
+                
+                sx = abs(step2.scl_x - step1.scl_x) / delta_t if delta_t != 0 else 0.0
+                sy = abs(step2.scl_y - step1.scl_y) / delta_t if delta_t != 0 else 0.0
+                sz = abs(step2.scl_z - step1.scl_z) / delta_t if delta_t != 0 else 0.0
+                col_s.label(text=f"Scl X: {sx:.4f}"); col_s.label(text=f"Scl Y: {sy:.4f}"); col_s.label(text=f"Scl Z: {sz:.4f}")
+
+        # --- RAW SUBSTEP PREVIEWER ---
         layout.separator()
-        box_tags = layout.box()
-        row_tags_header = box_tags.row()
-        row_tags_header.label(text="Tracks & Baker", icon='ACTION')
-        row_tags_ops = row_tags_header.row(align=True)
-        op_add_seg = row_tags_ops.operator("logicsub.add_tag", text="", icon='MARKER_HLT'); op_add_seg.tag_type = 'SEG'
-        op_add_grp = row_tags_ops.operator("logicsub.add_tag", text="", icon='GROUP'); op_add_grp.tag_type = 'GROUPIE'
+        prev_box = layout.box()
+        prev_row = prev_box.row(align=True)
+        prev_row.label(text="Raw Substep Previewer", icon='PLAY')
+        
+        scope_row = prev_box.row(align=True)
+        scope_row.prop(s, "logic_sub_preview_scope", expand=True)
+        
+        mode_row = prev_box.row(align=True)
+        mode_row.prop(s, "logic_sub_preview_mode", expand=True)
+        
+        pr_row = prev_box.row(align=True)
+        pr_row.prop(s, "logic_sub_preview_fps", text="FPS")
+        
+        is_playing = s.logic_sub_is_previewing
+        pr_op = prev_box.operator("logicsub.preview_play", text="Pause Preview" if is_playing else "Play Viewer", icon='PAUSE' if is_playing else 'PLAY', depress=is_playing)
 
-        for i, tag in enumerate(active_mapping.tags):
-            tag_box = box_tags.box()
-            header_row = tag_box.row(align=True)
-            
-            if tag.type == 'SEG': icon = 'MARKER'
-            else: icon = 'TRIA_DOWN' if tag.is_expanded else 'TRIA_RIGHT'
-            
-            if tag.type == 'GROUPIE': header_row.prop(tag, "is_expanded", text="", icon=icon, emboss=False)
-            header_row.prop(tag, "name", text="")
-            
-            if tag.type == 'SEG':
-                header_row.prop(tag, "target_step", text="Step")
-                header_row.prop(tag, "is_selected_for_bridge", text="", icon='LINKED')
-            
-            play_op = header_row.operator("logicsub.activate_tag", text="", icon='PLAY'); play_op.idx = i
-            rem_op = header_row.operator("logicsub.remove_tag", text="", icon='X'); rem_op.idx = i
-            
-            if tag.type == 'GROUPIE' and tag.is_expanded:
-                col = tag_box.column(align=True)
-                col.prop(tag, "show_ghosting")
-                col.prop(tag, "ease_type", text="Slope")
-                op_smooth = col.operator("logicsub.smooth_groupie", text="Smooth Interp", icon='SMOOTH'); op_smooth.idx = i
+        layout.separator()
+        
+        layout.label(text="Interactive Scrub-Strip", icon='ACTION_TWEAK')
+        if s.logic_sub_preview_scope == 'FULL':
+            layout.prop(s, "logic_sub_full_scrubber", text="Full Rig Scrub", slider=True)
+        else:
+            layout.prop(s, "logic_sub_current_step", text="Axis Scrub", slider=True)
+
+
+        # --- STEP 6: SMOOV'MNT ENGINE™ OVERHAUL ---
+        layout.separator()
+        smoov_box = layout.box()
+        smoov_header = smoov_box.row()
+        smoov_header.label(text="Smoov'mnt Engine™", icon='OUTLINER_OB_ARMATURE')
+        
+        pf_box = smoov_box.box()
+        pf_box.label(text="Mapping Mechanics", icon='PHYSICS')
+        col = pf_box.column(align=True)
+        if mapping:
+            col.prop(mapping, "phase_offset")
+            col.prop(mapping, "gear_ratio")
+        
+        pf_box.separator()
+        pf_box.operator("logicsub.auto_limit_bounds", text="Auto-Limit Rig Bounds", icon='CONSTRAINT')
+        
+        intel_box = smoov_box.box()
+        intel_box.label(text="Motion Intelligence Layer", icon='ACTION')
+        
+        br_row = intel_box.row(align=True)
+        br_row.operator("logicsub.bridge_segs", text="Bridge Checked Segs", icon='NLA_PUSHDOWN')
+        intel_box.separator()
+        
+        add_row = intel_box.row(align=True)
+        op_s = add_row.operator("logicsub.add_tag", text="+ Seg", icon='MARKER'); op_s.tag_type = 'SEG'
+        op_g = add_row.operator("logicsub.add_tag", text="+ Track", icon='GROUP'); op_g.tag_type = 'GROUPIE'
+        
+        if mapping:
+            for i, tag in enumerate(mapping.tags):
+                t_row = intel_box.row(align=True)
                 
-                grid = col.grid_flow(row_major=True, columns=5, even_columns=True, even_rows=True, align=True)
-                for j, gs in enumerate(tag.group_steps):
-                    if j >= len(active_mapping.steps): continue
-                    grid.prop(gs, "is_active", text=f"{j}", toggle=True)
+                op_rad = t_row.operator("logicsub.activate_tag", text="", icon='PLAY')
+                op_rad.idx = i
+                
+                if tag.type == 'SEG': t_row.prop(tag, "is_selected_for_bridge", text="")
+                t_row.prop(tag, "name", text="")
+                
+                t_row.prop(tag, "is_expanded", text="", icon='TRIA_DOWN' if tag.is_expanded else 'TRIA_LEFT')
+                rem_op = t_row.operator("logicsub.remove_tag", text="", icon='X')
+                rem_op.idx = i
+                
+                if tag.is_expanded:
+                    det_box = intel_box.box()
                     
-                bake_box = tag_box.box()
-                bake_box.label(text="Action Baker", icon='ANIM_DATA')
-                bake_box.prop(tag, "bake_mode", text="Mode")
-                if tag.bake_mode in {'LOOP', 'PING_PONG'}: bake_box.prop(tag, "loop_count")
-                bake_box.prop(tag, "frame_gap")
-                bake_box.prop(tag, "time_warp", text="Warp")
-                bake_box.prop(tag, "use_jitter")
-                if tag.use_jitter: bake_box.prop(tag, "jitter_intensity")
-                bake_box.prop(tag, "push_to_nla")
-                
-                bake_op = bake_box.operator("logicsub.bake_action", text="Bake to Action", icon='REC'); bake_op.idx = i
+                    if tag.type == 'SEG':
+                        det_box.prop(tag, "target_step", text="Target Step")
+                    else:
+                        det_box.label(text="Active Steps:", icon='CHECKBOX_HLT')
+                        g_grid = det_box.grid_flow(columns=10, align=True)
+                        for g_idx, gs in enumerate(tag.group_steps):
+                            g_grid.prop(gs, "is_active", text=f"{g_idx}", toggle=True)
+                            
+                        active_indices = [idx for idx, gs in enumerate(tag.group_steps) if gs.is_active]
+                        if active_indices:
+                            graph_str = ""
+                            for x in range(len(mapping.steps)):
+                                if x in active_indices: graph_str += "█"
+                                else: graph_str += "·"
+                            det_box.label(text=f"Profile: [{graph_str}]", icon='IMAGE_ALPHA')
+                        
+                        det_box.separator()
+                        
+                        split = det_box.split(factor=0.5)
+                        col_l = split.column(align=True)
+                        col_r = split.column(align=True)
+                        
+                        col_l.label(text="Interpolation", icon='IPO_BEZIER')
+                        col_l.prop(tag, "ease_type", text="")
+                        smooth_op = col_l.operator("logicsub.smooth_groupie", text="Apply Smoothing", icon='MOD_SMOOTH')
+                        smooth_op.idx = i
+                        
+                        col_l.separator()
+                        col_l.label(text="Procedural Noise", icon='MOD_NOISE')
+                        col_l.prop(tag, "use_jitter", text="Enable Jitter")
+                        if tag.use_jitter: col_l.prop(tag, "jitter_intensity", text="Intensity")
+                        
+                        col_r.label(text="Action Baking", icon='ACTION')
+                        col_r.prop(tag, "bake_mode", text="")
+                        if tag.bake_mode in {'LOOP', 'PING_PONG'}: col_r.prop(tag, "loop_count", text="Loops")
+                        col_r.prop(tag, "time_warp", text="")
+                        col_r.prop(tag, "frame_gap", text="Frame Gap")
+                        
+                        col_r.separator()
+                        r_nla = col_r.row(align=True)
+                        r_nla.prop(tag, "push_to_nla", text="NLA Push", toggle=True)
+                        r_nla.prop(tag, "show_ghosting", text="Arc Ghost", toggle=True, icon='STYLUS_PRESSURE')
+                        
+                        b_op = col_r.operator("logicsub.bake_action", text="Bake to Action", icon='RENDER_ANIMATION')
+                        b_op.idx = i
 
-        bridge_row = box_tags.row()
-        bridge_row.operator("logicsub.bridge_segs", text="Bridge Selected Segs", icon='NLA')
+            if len(mapping.tags) == 0:
+                intel_box.label(text="Add Segs or Tracks to start.", icon='INFO')
 
+        layout.separator()
+        status_box = layout.box()
+        status_box.row().label(text=s.logic_sub_status_msg, icon='INFO')
 
 # -------------------------------------------------------
 # REGISTRATION
@@ -2696,42 +2866,33 @@ class VIEW3D_PT_logic_sub(bpy.types.Panel):
 
 classes = (
     LogicSubClipboard,
+    LogicSubDeckItem,
     LogicSubTrackedProp,
     LogicSubModConState,
     LogicSubDrivenStep,
     LogicSubTagStep,
     LogicSubTag,
     LogicSubMapping,
-    LogicSubDeckItem,
     LogicSubBatchSettings,
-    
-    LOGICSUB_UL_deck_list,
-    LOGICSUB_OT_move_deck,
     LOGICSUB_OT_apply_no_touchy_math,
-    LOGICSUB_OT_execute_backslide,
-    LOGICSUB_OT_copy_deck,
-    LOGICSUB_OT_tween_all_steps,
-    LOGICSUB_OT_generate_recoil,
     LOGICSUB_OT_copy_error,
     LOGICSUB_OT_add_deck,
     LOGICSUB_OT_remove_deck,
+    LOGICSUB_OT_nav_deck,
+    LOGICSUB_OT_set_active_deck,
     LOGICSUB_OT_init_mapping,
     LOGICSUB_OT_toggle_nested_decks,
-    LOGICSUB_OT_step_tool,
-    LOGICSUB_OT_wand_snap,
-    LOGICSUB_OT_isolate_target,
-    LOGICSUB_OT_reset_step_transforms,
-    LOGICSUB_OT_snapshot_step,
-    LOGICSUB_OT_bridge_to_next,
     LOGICSUB_OT_exec,
     LOGICSUB_OT_exec_full,
     LOGICSUB_OT_play_to_step,
     LOGICSUB_OT_set_driven_step,
-    LOGICSUB_OT_flip_step,
-    LOGICSUB_OT_shuffle_channels,
+    LOGICSUB_OT_preview_play,
+    LOGICSUB_OT_execute_backslide,
     LOGICSUB_OT_copy_clipboard,
     LOGICSUB_OT_paste_clipboard,
     LOGICSUB_OT_copy_step,
+    LOGICSUB_OT_flip_step,
+    LOGICSUB_OT_shuffle_channels,
     LOGICSUB_OT_quick_math_propagate,
     LOGICSUB_OT_add_tracked_prop,
     LOGICSUB_OT_remove_tracked_prop,
@@ -2754,95 +2915,100 @@ classes = (
     LOGICSUB_OT_reset_table,
     LOGICSUB_OT_open_log,
     LOGICSUB_OT_generate_drivers,
-    LOGICSUB_OT_preview_play,
-    
-    VIEW3D_PT_logic_sub,
+    LOGICSUB_OT_step_tool,
+    LOGICSUB_OT_wand_snap,
+    LOGICSUB_OT_isolate_target,
+    LOGICSUB_OT_reset_step_transforms,
+    LOGICSUB_OT_snapshot_step,
+    LOGICSUB_OT_bridge_to_next,
+    LOGICSUB_OT_generate_recoil,
+    LOGICSUB_PT_panel,
 )
 
-from bpy.app.handlers import persistent
-
-@persistent
-def depsgraph_update_handler(scene, depsgraph):
-    if getattr(scene, "logic_sub_is_syncing", False):
-        return
-    pass
-
 def register():
-    for cls in classes: bpy.utils.register_class(cls)
+    for cls in classes:
+        try: bpy.utils.unregister_class(cls)
+        except: pass
+        bpy.utils.register_class(cls)
 
-    bpy.types.Scene.logic_sub_object = PointerProperty(type=bpy.types.Object, name="Trigger Object")
-    bpy.types.Scene.logic_sub_bone_name = StringProperty(name="Trigger Bone")
-    bpy.types.Scene.logic_sub_channel = EnumProperty(items=[
-        ('LOC_X', "Loc X", ""), ('LOC_Y', "Loc Y", ""), ('LOC_Z', "Loc Z", ""),
-        ('ROT_X', "Rot X", ""), ('ROT_Y', "Rot Y", ""), ('ROT_Z', "Rot Z", ""),
-        ('SCL_X', "Scl X", ""), ('SCL_Y', "Scl Y", ""), ('SCL_Z', "Scl Z", "")], default='LOC_Z')
-    bpy.types.Scene.logic_sub_direction = EnumProperty(items=[('POS', "Positive (+)", ""), ('NEG', "Negative (-)", "")], default='POS')
-    
+    bpy.types.Scene.logic_sub_show_inversion = BoolProperty(default=False)
     bpy.types.Scene.logic_sub_inv_loc_x = BoolProperty(default=True); bpy.types.Scene.logic_sub_inv_loc_y = BoolProperty(default=True); bpy.types.Scene.logic_sub_inv_loc_z = BoolProperty(default=True)
     bpy.types.Scene.logic_sub_inv_rot_x = BoolProperty(default=True); bpy.types.Scene.logic_sub_inv_rot_y = BoolProperty(default=True); bpy.types.Scene.logic_sub_inv_rot_z = BoolProperty(default=True)
-    bpy.types.Scene.logic_sub_inv_scl_x = BoolProperty(default=True); bpy.types.Scene.logic_sub_inv_scl_y = BoolProperty(default=True); bpy.types.Scene.logic_sub_inv_scl_z = BoolProperty(default=True)
+    bpy.types.Scene.logic_sub_inv_scl_x = BoolProperty(default=False); bpy.types.Scene.logic_sub_inv_scl_y = BoolProperty(default=False); bpy.types.Scene.logic_sub_inv_scl_z = BoolProperty(default=False)
 
-    bpy.types.Scene.logic_sub_decks = CollectionProperty(type=LogicSubDeckItem)
-    bpy.types.Scene.logic_sub_active_deck_idx = IntProperty(default=0, min=0)
-    bpy.types.Scene.logic_sub_mappings = CollectionProperty(type=LogicSubMapping)
-    
-    bpy.types.Scene.logic_sub_clipboard = PointerProperty(type=LogicSubClipboard)
-    bpy.types.Scene.logic_sub_batch = PointerProperty(type=LogicSubBatchSettings)
-    bpy.types.Scene.logic_sub_show_batcher = BoolProperty(default=False)
-    bpy.types.Scene.logic_sub_show_physics = BoolProperty(default=False)
-
-    bpy.types.Scene.logic_sub_current_step = IntProperty(name="Substep", default=0, min=0, update=update_scrubber)
-    bpy.types.Scene.logic_sub_full_scrubber = IntProperty(name="Full Scrubber", default=0, update=update_full_scrubber)
-
-    bpy.types.Scene.logic_sub_is_syncing = BoolProperty(default=False)
     bpy.types.Scene.logic_sub_is_capturing = BoolProperty(default=False)
+    bpy.types.Scene.logic_sub_is_syncing = BoolProperty(default=False)
+    bpy.types.Scene.logic_sub_status_msg = StringProperty(default="Ready.")
+    bpy.types.Scene.logic_sub_clipboard = PointerProperty(type=LogicSubClipboard)
+    bpy.types.Scene.logic_sub_decks = CollectionProperty(type=LogicSubDeckItem)
+    bpy.types.Scene.logic_sub_active_deck_idx = IntProperty(default=0)
+    bpy.types.Scene.logic_sub_object = PointerProperty(type=bpy.types.Object)
+    bpy.types.Scene.logic_sub_bone_name = StringProperty()
+    bpy.types.Scene.logic_sub_mappings = CollectionProperty(type=LogicSubMapping)
 
-    bpy.types.Scene.logic_sub_is_previewing = BoolProperty(default=False)
-    bpy.types.Scene.logic_sub_preview_mode = EnumProperty(items=[('PLAY', 'Play Once', ''), ('LOOP', 'Loop', ''), ('BOUNCE', 'Ping-Pong', '')], default='PLAY')
-    bpy.types.Scene.logic_sub_preview_scope = EnumProperty(items=[('SINGLE', 'Active Direction Only', ''), ('FULL', 'Full Range (+/-)', '')], default='SINGLE')
-    bpy.types.Scene.logic_sub_preview_fps = IntProperty(default=24, min=1)
+    bpy.types.Scene.logic_sub_channel = EnumProperty(
+        items=[('LOC_X', "Loc X", ""), ('LOC_Y', "Loc Y", ""), ('LOC_Z', "Loc Z", ""),
+               ('ROT_X', "Rot X", ""), ('ROT_Y', "Rot Y", ""), ('ROT_Z', "Rot Z", ""),
+               ('SCL_X', "Scale X", ""), ('SCL_Y', "Scale Y", ""), ('SCL_Z', "Scale Z", "")],
+        name="Channel", default='ROT_Z'
+    )
+    bpy.types.Scene.logic_sub_direction = EnumProperty(items=[('POS', "Positive (+)", ""), ('NEG', "Negative (-)", "")], name="Direction", default='POS')
+    bpy.types.Scene.logic_sub_display_mode = EnumProperty(
+        items=[('SUBSTEPS', "Substeps", ""), ('DIFFERENCE', "Value Difference", ""), ('PERUNIT', "Per Unit", "")],
+        name="Display", default='SUBSTEPS'
+    )
     
-    bpy.app.handlers.depsgraph_update_post.append(depsgraph_update_handler)
+    bpy.types.Scene.logic_sub_current_step = IntProperty(name="Step", default=0, min=0, update=update_scrubber)
+    bpy.types.Scene.logic_sub_full_scrubber = IntProperty(name="Full Rig Scrubber", default=0, update=update_full_scrubber)
+    
+    bpy.types.Scene.logic_sub_preview_fps = IntProperty(name="Framerate (FPS)", default=24, min=1, max=120)
+    bpy.types.Scene.logic_sub_is_previewing = BoolProperty(default=False)
+    bpy.types.Scene.logic_sub_preview_target = IntProperty(default=-1)
+    
+    bpy.types.Scene.logic_sub_preview_scope = EnumProperty(
+        items=[('SINGLE', "Current Axis", ""), ('FULL', "Full Rig (Pos & Neg)", "")],
+        name="Scope", default='SINGLE'
+    )
+    bpy.types.Scene.logic_sub_preview_mode = EnumProperty(
+        items=[('LOOP', 'Loop', ''), ('BOUNCE', 'Bounce/Ping-Pong', '')],
+        name="Mode", default='LOOP'
+    )
+    bpy.types.Scene.logic_sub_preview_direction = IntProperty(default=1) 
+    bpy.types.Scene.logic_sub_show_batcher = BoolProperty(default=False)
+    bpy.types.Scene.logic_sub_show_slopes = BoolProperty(default=False)
+    bpy.types.Scene.logic_sub_batch = PointerProperty(type=LogicSubBatchSettings)
+
     global _ls_draw_handler
-    _ls_draw_handler = bpy.types.SpaceView3D.draw_handler_add(draw_ghost_arcs, (), 'WINDOW', 'POST_VIEW')
+    if _ls_draw_handler is None:
+        _ls_draw_handler = bpy.types.SpaceView3D.draw_handler_add(draw_ghost_arcs, (), 'WINDOW', 'POST_VIEW')
 
 def unregister():
-    for cls in reversed(classes): bpy.utils.unregister_class(cls)
-    
-    del bpy.types.Scene.logic_sub_object
-    del bpy.types.Scene.logic_sub_bone_name
-    del bpy.types.Scene.logic_sub_channel
-    del bpy.types.Scene.logic_sub_direction
-    
-    del bpy.types.Scene.logic_sub_inv_loc_x; del bpy.types.Scene.logic_sub_inv_loc_y; del bpy.types.Scene.logic_sub_inv_loc_z
-    del bpy.types.Scene.logic_sub_inv_rot_x; del bpy.types.Scene.logic_sub_inv_rot_y; del bpy.types.Scene.logic_sub_inv_rot_z
-    del bpy.types.Scene.logic_sub_inv_scl_x; del bpy.types.Scene.logic_sub_inv_scl_y; del bpy.types.Scene.logic_sub_inv_scl_z
-    
-    del bpy.types.Scene.logic_sub_decks
-    del bpy.types.Scene.logic_sub_active_deck_idx
-    del bpy.types.Scene.logic_sub_mappings
-    
-    del bpy.types.Scene.logic_sub_clipboard
-    del bpy.types.Scene.logic_sub_batch
-    del bpy.types.Scene.logic_sub_show_batcher
-    del bpy.types.Scene.logic_sub_show_physics
-    
-    del bpy.types.Scene.logic_sub_current_step
-    del bpy.types.Scene.logic_sub_full_scrubber
-    del bpy.types.Scene.logic_sub_is_syncing
-    del bpy.types.Scene.logic_sub_is_capturing
-    del bpy.types.Scene.logic_sub_is_previewing
-    del bpy.types.Scene.logic_sub_preview_mode
-    del bpy.types.Scene.logic_sub_preview_scope
-    del bpy.types.Scene.logic_sub_preview_fps
-    
-    if depsgraph_update_handler in bpy.app.handlers.depsgraph_update_post:
-        bpy.app.handlers.depsgraph_update_post.remove(depsgraph_update_handler)
-    
+    for cls in reversed(classes):
+        try: bpy.utils.unregister_class(cls)
+        except: pass
+        
+    props = [
+        "logic_sub_is_capturing", "logic_sub_is_syncing", "logic_sub_status_msg", 
+        "logic_sub_clipboard", "logic_sub_show_batcher", "logic_sub_show_slopes",
+        "logic_sub_batch", "logic_sub_decks", "logic_sub_active_deck_idx", 
+        "logic_sub_object", "logic_sub_bone_name", "logic_sub_mappings", 
+        "logic_sub_channel", "logic_sub_direction", "logic_sub_display_mode", 
+        "logic_sub_current_step", "logic_sub_full_scrubber", "logic_sub_preview_fps", 
+        "logic_sub_is_previewing", "logic_sub_preview_target", "logic_sub_preview_scope", 
+        "logic_sub_preview_mode", "logic_sub_preview_direction", "logic_sub_show_inversion", 
+        "logic_sub_inv_loc_x", "logic_sub_inv_loc_y", "logic_sub_inv_loc_z", 
+        "logic_sub_inv_rot_x", "logic_sub_inv_rot_y", "logic_sub_inv_rot_z", 
+        "logic_sub_inv_scl_x", "logic_sub_inv_scl_y", "logic_sub_inv_scl_z"
+    ]
+    for p in props:
+        if hasattr(bpy.types.Scene, p): delattr(bpy.types.Scene, p)
+        
     global _ls_draw_handler
     if _ls_draw_handler is not None:
         bpy.types.SpaceView3D.draw_handler_remove(_ls_draw_handler, 'WINDOW')
         _ls_draw_handler = None
 
 if __name__ == "__main__":
+    try: unregister()
+    except: pass
     register()
